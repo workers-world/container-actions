@@ -1,6 +1,6 @@
 # Actions bundle 当前版本（镜像仓 pin 此 tag）
 current: actions/v0.1.0
-sha: "97c66617ff296181d9dcc51d7ed88e7546d0d877"
+sha: "fbb34d560f245e8b48e0e0ef1ec57cae68308dd3"
 released_at: "2026-10-09"
 notes: |
   Released via workflow_dispatch.

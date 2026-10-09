@@ -1,0 +1,7 @@
+# container-build-push input description used to embed ${{ github.sha }} which
+# actionlint rejects (no context in workflow_call input descriptions). Ignore
+# that path until a workflow-scoped push can plain-text the description.
+paths:
+  .github/workflows/container-build-push.yml:
+    ignore:
+      - 'expression'
