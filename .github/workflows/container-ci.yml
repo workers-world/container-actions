@@ -33,7 +33,7 @@ jobs:
       (github.event_name == 'push' && inputs.smoke_on_push)
     permissions:
       contents: read
-    uses: workers-world/container-actions/.github/workflows/container-docker-smoke.yml@actions/v0.1.0
+    uses: workers-world/container-actions/.github/workflows/container-docker-smoke.yml@actions/v0.1.1
     with:
       image: ${{ inputs.image }}
       context: ${{ inputs.context }}
