@@ -1,0 +1,6 @@
+# Ignore expression-in-description on container-build-push until a workflow-scoped
+# push can replace `${{ github.sha }}` with plain text in the input description.
+paths:
+  .github/workflows/container-build-push.yml:
+    ignore:
+      - 'context "github" is not allowed here'
