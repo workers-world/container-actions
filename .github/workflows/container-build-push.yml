@@ -20,7 +20,7 @@ on:
         type: boolean
         default: true
       push_sha_tag:
-        description: 是否打 :${{ github.sha }} 短前缀
+        description: 是否打 :sha-<commit> 短前缀
         type: boolean
         default: true
       emit_dispatch:
