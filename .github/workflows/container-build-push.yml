@@ -1,0 +1,113 @@
+# 仅 master（或 workflow_dispatch / caller schedule）推 GHCR。
+# 禁止挂在 push → dev_*。
+name: Container build and push
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: GHCR 镜像，如 ghcr.io/workers-world/container_yt_dlp
+        type: string
+        required: true
+      context:
+        type: string
+        default: "."
+      dockerfile:
+        type: string
+        default: "Dockerfile"
+      push_latest:
+        description: 是否打 :latest
+        type: boolean
+        default: true
+      push_sha_tag:
+        description: 是否打 :${{ github.sha }} 短前缀
+        type: boolean
+        default: true
+      emit_dispatch:
+        description: push 成功后是否 repository_dispatch 通知下游
+        type: boolean
+        default: false
+      dispatch_type:
+        description: repository_dispatch event_type
+        type: string
+        default: ""
+      dispatch_repos:
+        description: 逗号分隔 owner/repo（如 workers-world/dld1）
+        type: string
+        default: ""
+      runner:
+        type: string
+        default: "ubuntu-latest"
+    secrets:
+      DISPATCH_TOKEN:
+        description: 跨仓 repository_dispatch 用 PAT（repo scope）；未设则跳过 dispatch
+        required: false
+
+permissions: {}
+
+jobs:
+  build-push:
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.image }}
+          tags: |
+            type=raw,value=latest,enable=${{ inputs.push_latest }}
+            type=sha,format=long,enable=${{ inputs.push_sha_tag }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.context }}/${{ inputs.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Repository dispatch
+        if: inputs.emit_dispatch && inputs.dispatch_type != '' && inputs.dispatch_repos != ''
+        env:
+          DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          DISPATCH_TYPE: ${{ inputs.dispatch_type }}
+          DISPATCH_REPOS: ${{ inputs.dispatch_repos }}
+          SOURCE_REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_IMAGE: ${{ inputs.image }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISPATCH_TOKEN}" ]; then
+            echo "DISPATCH_TOKEN unset; skip repository_dispatch"
+            exit 0
+          fi
+          export GH_TOKEN="${DISPATCH_TOKEN}"
+          IFS=',' read -ra repos <<< "${DISPATCH_REPOS}"
+          for raw in "${repos[@]}"; do
+            repo="$(echo "$raw" | xargs)"
+            [ -n "$repo" ] || continue
+            echo "Dispatch ${DISPATCH_TYPE} → ${repo}"
+            gh api --method POST "repos/${repo}/dispatches" \
+              -f event_type="${DISPATCH_TYPE}" \
+              -f "client_payload[source]=${SOURCE_REPO}" \
+              -f "client_payload[sha]=${SOURCE_SHA}" \
+              -f "client_payload[image]=${SOURCE_IMAGE}"
+          done

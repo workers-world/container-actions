@@ -1,0 +1,229 @@
+# 合入 master（workflow 变更）后打 actions/vX.Y.Z；manifest 经 PR 回填。
+# 首次无 tag 时用 manifest current（actions/v0.1.0）。Caller 禁止 @master。
+name: Release actions bundle
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/**"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 可选。留空则 patch+1；填写如 0.1.0 → tag actions/v0.1.0
+        required: false
+        type: string
+        default: ""
+
+permissions: {}
+
+concurrency:
+  group: release-actions-bundle
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'push' &&
+        !contains(github.event.head_commit.message, '[skip actions-release]')
+      )
+    env:
+      RELEASE_BOT_APP_ID_EFFECTIVE: ${{ vars.RELEASE_BOT_APP_ID || secrets.RELEASE_BOT_APP_ID }}
+    steps:
+      - name: Mint GitHub App token
+        id: bot-token
+        if: env.RELEASE_BOT_APP_ID_EFFECTIVE != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ env.RELEASE_BOT_APP_ID_EFFECTIVE }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ steps.bot-token.outputs.token || secrets.GHA_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Resolve version, align pins, create tag, open backfill PR
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_GH_TOKEN: ${{ steps.bot-token.outputs.token || secrets.GHA_TOKEN || secrets.GITHUB_TOKEN }}
+          WORKFLOW_PUSH_GH_TOKEN: ${{ steps.bot-token.outputs.token }}
+          GH_TOKEN: ${{ steps.bot-token.outputs.token || secrets.GHA_TOKEN || secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git fetch --tags origin
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git_push_phase_b() {
+            git config --local --unset-all 'http.https://github.com/.extraheader' 2>/dev/null || true
+            include_if_keys="$(git config --local --name-only -l 2>/dev/null | grep -i '^includeif\.gitdir' || true)"
+            while IFS= read -r key; do
+              [ -n "$key" ] || continue
+              git config --local --unset-all "$key" 2>/dev/null || true
+            done <<< "${include_if_keys}"
+            git config --local --unset-all credential.helper 2>/dev/null || true
+            git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_GH_TOKEN}@github.com/${REPO}.git"
+            git push "$@"
+          }
+
+          BUNDLE_PIN_GLOBS=(.github/workflows templates)
+
+          rewrite_nested_pins() {
+            local target_tag="$1"
+            local changed=0
+            while IFS= read -r -d '' f; do
+              if grep -qE '@actions/v[0-9]+\.[0-9]+\.[0-9]+' "$f"; then
+                sed -i -E "s|@actions/v[0-9]+\.[0-9]+\.[0-9]+|@${target_tag}|g" "$f"
+                changed=1
+              fi
+            done < <(
+              find "${BUNDLE_PIN_GLOBS[@]}" -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 2>/dev/null || true
+            )
+            if [ "$changed" = 1 ]; then
+              echo "Rewrote nested @actions/v* pins → @${target_tag}"
+            fi
+          }
+
+          TRIGGER_REF="$(git rev-parse HEAD)"
+          existing_on_head="$(git tag -l 'actions/v*' --points-at "$TRIGGER_REF" | sort -t. -k1,1 -k2,2n -k3,3n | tail -1 || true)"
+          if [ -n "${existing_on_head}" ] && [ -z "${INPUT_VERSION}" ]; then
+            TAG="${existing_on_head}"
+            VERSION="${TAG#actions/v}"
+            TAG_CREATED=0
+            NEED_TAG=0
+            echo "HEAD already tagged ${TAG}; sync backfill PR only"
+          else
+            latest="$(git tag -l 'actions/v*' --sort=-v:refname | head -1 || true)"
+            if [ -n "${INPUT_VERSION}" ]; then
+              VERSION="${INPUT_VERSION}"
+            elif [ -n "${latest}" ]; then
+              ver="${latest#actions/v}"
+              IFS=. read -r maj min pat <<< "${ver}"
+              VERSION="${maj}.${min}.$((pat + 1))"
+            else
+              if [ -f manifest/actions-bundle.yaml ]; then
+                cur="$(grep -E '^current:' manifest/actions-bundle.yaml | head -1 | awk '{print $2}' || true)"
+                if [[ "${cur}" =~ ^actions/v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+                  VERSION="${BASH_REMATCH[1]}"
+                else
+                  VERSION="0.1.0"
+                fi
+              else
+                VERSION="0.1.0"
+              fi
+            fi
+            if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::version 须为 X.Y.Z，当前: ${VERSION}"
+              exit 1
+            fi
+            TAG="actions/v${VERSION}"
+            TAG_CREATED=0
+            if git rev-parse "$TAG" >/dev/null 2>&1; then
+              NEED_TAG=0
+            else
+              NEED_TAG=1
+            fi
+          fi
+
+          MANIFEST="manifest/actions-bundle.yaml"
+          TODAY="$(date -u +%Y-%m-%d)"
+          BRANCH="chore/actions-bundle-${VERSION}"
+          COMMIT_MSG="chore: release actions bundle ${TAG} — align pins + manifest [skip actions-release]"
+
+          write_manifest() {
+            local ref="$1"
+            mkdir -p "$(dirname "$MANIFEST")"
+            {
+              echo "# Actions bundle 当前版本（镜像仓 pin 此 tag）"
+              echo "current: ${TAG}"
+              echo "sha: \"${ref}\""
+              echo "released_at: \"${TODAY}\""
+              echo "notes: |"
+              echo "  Released via ${EVENT_NAME}."
+            } > "$MANIFEST"
+          }
+
+          git fetch origin master
+          git checkout -B "$BRANCH" origin/master
+
+          if [ "$NEED_TAG" = 1 ] && [ -z "${WORKFLOW_PUSH_GH_TOKEN}" ]; then
+            echo "::error::新发 tag 须 release-bot App（workflows:write）。配置 RELEASE_BOT_APP_ID + RELEASE_BOT_PRIVATE_KEY。"
+            exit 1
+          fi
+
+          rewrite_nested_pins "${TAG}"
+          git add "${BUNDLE_PIN_GLOBS[@]}" 2>/dev/null || true
+          PHASE_A_STAGED=0
+          if ! git diff --cached --quiet 2>/dev/null; then
+            PHASE_A_STAGED=1
+            git commit -m "${COMMIT_MSG}"
+          fi
+
+          if [ "$NEED_TAG" = 1 ]; then
+            REF="$(git rev-parse HEAD)"
+            write_manifest "$REF"
+            git add "$MANIFEST"
+            if [ "$PHASE_A_STAGED" = 1 ]; then
+              git commit --amend --no-edit
+            else
+              git commit -m "${COMMIT_MSG}"
+            fi
+            REF="$(git rev-parse HEAD)"
+            write_manifest "$REF"
+            git add "$MANIFEST"
+            if ! git diff --cached --quiet; then
+              git commit --amend --no-edit
+            fi
+            REF="$(git rev-parse HEAD)"
+            git tag -a "$TAG" -m "Actions bundle ${TAG}"
+            git_push_phase_b origin "$TAG"
+            TAG_CREATED=1
+            echo "Created ${TAG} at ${REF}"
+          else
+            REF="$(git rev-list -n 1 "$TAG" 2>/dev/null || git rev-parse HEAD)"
+            write_manifest "$REF"
+            git add "$MANIFEST"
+            if ! git diff --cached --quiet || [ "$PHASE_A_STAGED" = 1 ]; then
+              git commit -m "chore: bump actions bundle manifest to ${TAG} [skip actions-release]" || true
+            fi
+          fi
+
+          if [ -z "${WORKFLOW_PUSH_GH_TOKEN}" ]; then
+            echo "::error::Phase B needs release-bot App token"
+            exit 1
+          fi
+
+          rewrite_nested_pins "${TAG}"
+          git add "${BUNDLE_PIN_GLOBS[@]}" 2>/dev/null || true
+          if ! git diff --cached --quiet 2>/dev/null; then
+            git commit -m "chore: align remaining nested pins for ${TAG} [skip actions-release]"
+          fi
+
+          if [ "$(git rev-list --count origin/master..HEAD 2>/dev/null || echo 0)" -gt 0 ]; then
+            git_push_phase_b -u origin "HEAD:${BRANCH}" --force-with-lease
+            existing="$(gh pr list --repo "$REPO" --head "$BRANCH" --base master --state open --json number --jq '.[0].number // empty')"
+            if [ -z "$existing" ]; then
+              gh pr create --repo "$REPO" \
+                --base master \
+                --head "$BRANCH" \
+                --title "chore: actions bundle ${TAG} (pins + manifest) [skip actions-release]" \
+                --body "Tag \`${TAG}\` backfill. Subject contains \`[skip actions-release]\`."
+            fi
+          fi
+
+          {
+            echo "### Actions bundle released"
+            echo "- **Tag**: \`${TAG}\` (created_this_run=${TAG_CREATED})"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,41 @@
+# 镜像仓 docker 门面：Release PR 上 smoke（不 push）。
+# Release PR / auto-merge / sync-default 仍走 worker-actions（caller 并列 job）。
+name: Container CI
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        type: string
+        required: true
+      context:
+        type: string
+        default: "."
+      dockerfile:
+        type: string
+        default: "Dockerfile"
+      runner:
+        type: string
+        default: "ubuntu-latest"
+      # 仅 pull_request 跑 smoke；push 时 caller 应设 smoke_on_push: false 或本门面默认跳过 push
+      smoke_on_push:
+        description: push 事件是否也跑 smoke（默认 false；dev 推送靠 Release PR 门禁）
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  docker-smoke:
+    if: >
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && inputs.smoke_on_push)
+    permissions:
+      contents: read
+    uses: workers-world/container-actions/.github/workflows/container-docker-smoke.yml@actions/v0.1.0
+    with:
+      image: ${{ inputs.image }}
+      context: ${{ inputs.context }}
+      dockerfile: ${{ inputs.dockerfile }}
+      runner: ${{ inputs.runner }}

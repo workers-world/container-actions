@@ -1,0 +1,7 @@
+# Actions bundle 当前版本（镜像仓 pin 此 tag）
+# 权威来源为 git tag；首次 push master 后由 release-actions-bundle 打出 / 回填
+current: actions/v0.1.0
+sha: ""
+released_at: ""
+notes: |
+  Initial container-actions bundle: docker smoke (PR) + build-push (master only).

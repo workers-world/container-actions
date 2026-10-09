@@ -1,0 +1,40 @@
+# 本仓 dogfood：actionlint；fork-safe（无 secrets）
+name: CI
+
+on:
+  pull_request:
+    branches: ["master", "dev_*"]
+  push:
+    branches: ["master"]
+    paths:
+      - ".github/workflows/**"
+      - "manifest/**"
+      - "templates/**"
+      - "docs/**"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workflow-lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Forbid unpinned / floating refs
+        run: |
+          set -euo pipefail
+          if grep -REn 'uses:\s*.+@(master|main|HEAD)\b' .github templates 2>/dev/null; then
+            echo "::error::禁止 uses @master/@main/@HEAD；pin actions/vX.Y.Z"
+            exit 1
+          fi
+
+      - name: actionlint
+        uses: rhysd/actionlint@v1.7.7
+        with:
+          args: -color

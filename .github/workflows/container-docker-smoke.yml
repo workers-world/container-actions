@@ -1,0 +1,47 @@
+# Release PR 门禁：docker build 冒烟，禁止 push。
+# Caller：pull_request → master 时调用；勿在 push dev_* 上推 GHCR。
+name: Container docker smoke
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: 本地 tag 名（仅 build 标签，不 push），如 ghcr.io/workers-world/container_yt_dlp
+        type: string
+        required: true
+      context:
+        description: docker build context
+        type: string
+        default: "."
+      dockerfile:
+        description: Dockerfile 路径（相对 context）
+        type: string
+        default: "Dockerfile"
+      runner:
+        description: runs-on；公开仓 dogfood / fork 须 ubuntu-latest
+        type: string
+        default: "ubuntu-latest"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ${{ inputs.runner }}
+    # PR 上跑；push 到 dev_* 时 caller 可用 if 跳过本 job
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build (load, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.context }}/${{ inputs.dockerfile }}
+          load: true
+          push: false
+          tags: ${{ inputs.image }}:smoke
