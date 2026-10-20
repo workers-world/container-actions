@@ -1,0 +1,7 @@
+{
+  "name": "@workers-world/container-actions",
+  "version": "0.0.0",
+  "private": true,
+  "description": "workers-world container GitHub Actions bundle (root package for npm ci / box tests)",
+  "license": "MIT"
+}
