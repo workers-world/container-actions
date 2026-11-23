@@ -72,4 +72,4 @@ Branch protection：Release PR required checks 须含 **docker-smoke**（或 reu
 
 ## 首 tag
 
-建仓后：合入 `master` → `release-actions-bundle` 打出 `actions/v0.1.0`（或 `workflow_dispatch` 指定 `0.1.0`）。在 tag 存在前，镜像仓 caller 的 `uses …@actions/v0.1.0` 会解析失败——先发本仓再迁 caller。
+版本权威 = [package.json](package.json) `version`（对齐 `framework_sdk_worker` / `worker-actions` 语义）：Release PR（`dev_*` → `master`，人工开，CI 含发版闸）里**本地 bump** `version` → 合入 `master` → `release-actions-bundle` 打 `actions/v{version}`（未 bump 则跳过）。镜像仓 caller 在 tag 存在前 `uses …@actions/vX.Y.Z` 会解析失败——先发本仓再迁 caller。

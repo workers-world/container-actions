@@ -38,3 +38,18 @@ jobs:
         uses: rhysd/actionlint@v1.7.7
         with:
           args: -color
+
+  # 发版闸：PR 触及产品文件须 bump package.json version（版本权威，bump 了才发）
+  release-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 需 diff PR base 与全量 tag
+          fetch-depth: 0
+      - env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: node .github/scripts/check-release-bump.mjs --base="$BASE_BRANCH" --tag-prefix=actions/v
