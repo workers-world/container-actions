@@ -53,3 +53,5 @@ jobs:
       - env:
           BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
         run: node .github/scripts/check-release-bump.mjs --base="$BASE_BRANCH" --tag-prefix=actions/v
+      # 仓身份声明校验（契约源：framework_sdk_worker/meta/repo-meta）
+      - run: node -e "const m=require('./.ww-repo.json'); if(m.type!=='action') { console.error('.ww-repo.json type 应为 action，当前: '+m.type); process.exit(1); }"
