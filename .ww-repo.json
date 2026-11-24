@@ -1,4 +1,7 @@
 {
   "type": "action",
-  "npm": "@workers-world/container-actions"
+  "npm": "@workers-world/container-actions",
+  "deps": [
+    "worker-actions"
+  ]
 }
